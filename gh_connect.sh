@@ -475,8 +475,15 @@ authenticate_github_cli() {
         GIT_USERNAME="$current_user"
         GH_AUTHENTICATED=true
 
-        # E-mail lekérése az API-ból
-        GIT_EMAIL=$(gh api user/emails --jq '[.[] | select(.primary==true)] | .[0].email' 2>/dev/null || echo "")
+        # E-mail lekérése az API-ból – CSAK akkor fogadjuk el, ha valódi email (@-t tartalmaz)
+        # A gh api user/emails 404-et adhat ha nincs user:email scope – ekkor JSON jön vissza
+        local raw_email_auth
+        raw_email_auth=$(gh api user/emails --jq '[.[] | select(.primary==true)] | .[0].email' 2>/dev/null || echo "")
+        if [[ "$raw_email_auth" == *"@"* ]]; then
+            GIT_EMAIL="$raw_email_auth"
+        else
+            GIT_EMAIL=""  # sync_git_config fogja bekérni kézzel
+        fi
 
         # Megerősítés kérése: ugyanazt a fiókot használjuk?
         if ! ask_yesno "Fiók megerősítés" \
@@ -511,10 +518,16 @@ authenticate_github_cli() {
             --hostname github.com \
             --git-protocol ssh
 
-        # Adatok lekérése a sikeres auth után
+        # Adatok lekérése a sikeres auth után – email validálással
         GIT_USERNAME=$(gh api user --jq '.login' 2>/dev/null)
-        GIT_EMAIL=$(gh api user/emails \
+        local raw_email_new
+        raw_email_new=$(gh api user/emails \
             --jq '[.[] | select(.primary==true)] | .[0].email' 2>/dev/null || echo "")
+        if [[ "$raw_email_new" == *"@"* ]]; then
+            GIT_EMAIL="$raw_email_new"
+        else
+            GIT_EMAIL=""  # sync_git_config fogja bekérni kézzel
+        fi
         GH_AUTHENTICATED=true
         log_ok "Sikeres bejelentkezés: @${GIT_USERNAME}"
     fi
@@ -681,20 +694,78 @@ EOF
 }
 
 # SSH publikus kulcs feltöltése GitHub-ra a gh CLI segítségével
+# FONTOS: set -euo pipefail környezetben a command substitution $(cmd) kilövheti
+# a scriptet ha cmd hibával tér vissza. Ezért if-statementet és timeout-ot használunk.
 upload_ssh_key_to_github() {
     local pub_path="$1"
     local key_title="${SCRIPT_NAME}-$(hostname -s)-$(date +%Y%m%d)"
 
     log_info "SSH kulcs feltöltése GitHub-ra: $key_title"
 
-    # Feltöltés (hibát nem dobjuk, ha már létezik)
-    if gh ssh-key add "$pub_path" \
+    # ── 1. lépés: Automatikus feltöltési kísérlet ────────────────────────────
+    # if-statement: set -e-vel kompatibilis (nem lő ki a scriptet hiba esetén)
+    # timeout 15: meggátolja a lefagyást ha a gh cli vár valamire
+    if timeout 15 gh ssh-key add "$pub_path" \
         --title "$key_title" \
-        --type authentication 2>/dev/null; then
+        --type authentication >/dev/null 2>&1; then
         log_ok "SSH kulcs feltöltve: $key_title"
-    else
-        log_warn "SSH kulcs feltöltés átugorva (lehet, hogy már létezik)."
+        return 0
     fi
+    log_warn "Automatikus SSH kulcs feltöltés sikertelen (scope hiány vagy már létezik)."
+
+    # ── 2. lépés: SSH kapcsolat tesztelése – ha már működik, kész vagyunk ────
+    # Ha az SSH autentikáció sikeres, a kulcs már fent van GitHub-on.
+    # Ez a legfontosabb ellenőrzés: meglévő kulcsnál kihagyja a read -r blokkot.
+    log_info "SSH kapcsolat tesztelése (timeout: 10s)..."
+    if [[ -z "${SSH_AUTH_SOCK:-}" ]]; then
+        eval "$(ssh-agent -s)" &>/dev/null
+    fi
+    ssh-add "$SSH_KEY_PATH" 2>/dev/null || true
+
+    local ssh_test
+    # timeout + BatchMode=yes: nem kér interaktív inputot, nem fagy le
+    ssh_test=$(timeout 10 ssh -T git@github.com \
+        -o StrictHostKeyChecking=accept-new \
+        -o ConnectTimeout=8 \
+        -o BatchMode=yes \
+        2>&1) || true
+
+    if echo "$ssh_test" | grep -q "successfully authenticated"; then
+        log_ok "SSH kapcsolat MŰKÖDIK – kulcs már fent van GitHub-on. ✓"
+        return 0
+    fi
+    log_warn "SSH teszt eredménye: ${ssh_test:-timeout}"
+
+    # ── 3. lépés: Fingerprint egyezés ellenőrzése ────────────────────────────
+    local pub_fingerprint
+    pub_fingerprint=$(ssh-keygen -lf "$pub_path" 2>/dev/null | awk '{print $2}' || echo "")
+
+    if [[ -n "$pub_fingerprint" ]]; then
+        local remote_keys
+        remote_keys=$(timeout 10 gh ssh-key list 2>/dev/null || echo "")
+        if echo "$remote_keys" | grep -q "$pub_fingerprint"; then
+            log_ok "SSH kulcs már szerepel a GitHub fiókon (fingerprint egyezik)."
+            return 0
+        fi
+    fi
+
+    # ── 4. lépés: Kézi feltöltés – csak ha az SSH sem működik ───────────────
+    log_warn "SSH kulcs nincs fent GitHub-on – kézi feltöltés szükséges!"
+    echo ""
+    echo -e "  ${C_YLW}${C_BOLD}▶ KÉZI SSH KULCS FELTÖLTÉS SZÜKSÉGES!${C_RST}"
+    echo ""
+    echo -e "  1. Nyisd meg: ${C_CYN}https://github.com/settings/ssh/new${C_RST}"
+    echo "  2. Title:    ${key_title}"
+    echo "  3. Key type: Authentication Key"
+    echo "  4. Key:      másold be az alábbi publikus kulcsot:"
+    echo ""
+    echo -e "  ${C_GRN}$(cat "$pub_path")${C_RST}"
+    echo ""
+    echo "  5. Kattints: 'Add SSH key'"
+    echo ""
+    log_info "Nyomj ENTER-t ha a kulcsot feltöltötted a GitHub-ra..."
+    read -r
+    log_ok "Folytatás – SSH kapcsolat tesztelése..."
 }
 
 # GitHub SSH kapcsolat tesztelése
