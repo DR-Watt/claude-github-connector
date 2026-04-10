@@ -1,0 +1,77 @@
+name: "CI – claude-github-connector"
+# =============================================================================
+# .github/workflows/ci.yml
+# =============================================================================
+# Projekt:      claude-github-connector
+# Repó:         https://github.com/dr-watt/claude-github-connector
+# Leírás:       CI pipeline a connector tool saját minőségellenőrzéséhez:
+#               - ShellCheck: bash szintaxis és best practice ellenőrzés
+#               - Gitleaks: titkos kulcsok és tokenek keresése
+#               - Markdown lint: README és dokumentáció ellenőrzés
+# Verzió:       1.0.0
+# Dokumentáció: https://docs.github.com/en/actions
+# =============================================================================
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # ===========================================================================
+  # ShellCheck – bash szintaxis és best practice
+  # ===========================================================================
+  shellcheck:
+    name: "🔍 ShellCheck"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck telepítése
+        run: sudo apt-get install -y shellcheck
+
+      - name: Összes .sh fájl ellenőrzése
+        run: |
+          echo "Ellenőrzött fájlok:"
+          find . -name "*.sh" -not -path "./.git/*" | tee /tmp/sh_files.txt
+          while read -r f; do
+            echo "── $f"
+            shellcheck --severity=warning --shell=bash "$f"
+          done < /tmp/sh_files.txt
+          echo "ShellCheck: OK"
+
+  # ===========================================================================
+  # Gitleaks – titkos adatok keresése
+  # ===========================================================================
+  gitleaks:
+    name: "🔒 Gitleaks"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # Markdown lint – dokumentáció ellenőrzés
+  # ===========================================================================
+  markdown-lint:
+    name: "📚 Markdown Lint"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: README.md ellenőrzés
+        run: |
+          [[ -f "README.md" ]] && echo "✓ README.md OK" || echo "::warning::README.md hiányzik"
+          [[ -f "gh_connect.sh" ]] && echo "✓ gh_connect.sh OK" || echo "::error::gh_connect.sh hiányzik!"

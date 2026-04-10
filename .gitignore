@@ -1,0 +1,117 @@
+# =============================================================================
+# .gitignore – claude-github-connector által generálva
+# Dokumentáció: https://github.com/dr-watt/claude-github-connector
+# =============================================================================
+
+# ── Általános rendszerfájlok ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.directory
+*.bak
+*.orig
+*.tmp
+tmp/
+temp/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+# Dokumentáció: https://docs.python.org/3.12/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+# UV – https://docs.astral.sh/uv/
+.venv/
+.uv/
+uv.lock
+# Virtualenv
+venv/
+env/
+ENV/
+
+# ── CUDA / PyTorch modellek és checkpointok ──────────────────────────────────
+# CUDA dokumentáció: https://docs.nvidia.com/cuda/
+# PyTorch dokumentáció: https://docs.pytorch.org/docs/stable/index.html
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+checkpoints/
+runs/
+wandb/
+mlruns/
+
+# ── Ollama – helyi LLM modellek ───────────────────────────────────────────────
+# Dokumentáció: https://ollama.readthedocs.io/en/
+.ollama/
+ollama_models/
+*.gguf
+*.ggml
+
+# ── vLLM / TurboQuant – quantizált modellek ──────────────────────────────────
+# vLLM dokumentáció: https://docs.vllm.ai/en/latest/
+# TurboQuant: https://github.com/0xSero/turboquant
+vllm_cache/
+model_cache/
+turboquant_output/
+quantized_models/
+*.gguf
+*.ggml
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# Dokumentáció: https://docs.docker.com/
+.docker/
+docker-compose.override.yml
+
+# ── Node.js ───────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn/cache
+dist/
+.next/
+.nuxt/
+
+# ── Rust / Cargo ──────────────────────────────────────────────────────────────
+target/
+Cargo.lock
+**/*.rs.bk
+
+# ── ZSH / Oh My Zsh ──────────────────────────────────────────────────────────
+# ZSH dokumentáció: https://zsh.sourceforge.io/Doc/
+# Oh My Zsh: https://github.com/ohmyzsh/ohmyzsh/wiki
+.zsh_history
+.zcompdump*
+
+# ── Környezeti változók és titkok ─────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.secret
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ── IDE és szerkesztők ────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.code-workspace
+.vim/
+*.iml
+
+# ── Naplófájlok ───────────────────────────────────────────────────────────────
+*.log
+logs/
+*.log.*
