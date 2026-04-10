@@ -1199,25 +1199,21 @@ LOGS
 # =============================================================================
 
 # Szinkronizálja a lokális repót a kiválasztott GitHub remote-tal.
-# Sorrendben: fetch → pull (rebase) → commit (ha van változás) → push
+# Helyes sorrend: ci.yml → main branch → COMMIT → fetch → pull → push
+# FONTOS: a commit-nak ELŐBB kell történnie a pull előtt!
+# Ha pull után commitolunk, a pull --rebase "unstaged changes" hibával leáll.
 sync_with_remote() {
     log_fn_enter
     log_section "Szinkronizálás → ${SELECTED_REPO}"
 
-    # ── Fetch: remote állapot lekérése ────────────────────────────────────────
-    # ci.yml áthelyezése .github/workflows/ alá, ha a gyökérben van
-    # GitHub Actions csak a .github/workflows/ mappából olvassa a pipeline-t
+    # ── ci.yml áthelyezése .github/workflows/ alá ────────────────────────────
+    # GitHub Actions csak a .github/workflows/ mappából olvassa a pipeline-t.
     if [[ -f "ci.yml" && ! -f ".github/workflows/ci.yml" ]]; then
         log_info "ci.yml áthelyezése .github/workflows/ könyvtárba..."
         mkdir -p ".github/workflows"
         mv "ci.yml" ".github/workflows/ci.yml"
         log_ok "CI pipeline áthelyezve: .github/workflows/ci.yml"
     fi
-
-    log_info "Fetch: remote branch-ek frissítése..."
-    git fetch origin 2>/dev/null \
-        && log_ok "Fetch kész." \
-        || log_warn "Fetch sikertelen (esetleg üres remote, ez normális első futásnál)."
 
     # ── Main branch biztosítása ───────────────────────────────────────────────
     if ! git rev-parse --verify main &>/dev/null; then
@@ -1227,24 +1223,14 @@ sync_with_remote() {
         git checkout main 2>/dev/null || true
     fi
 
-    # ── Pull: ha a remote-on van tartalom, szinkronizálunk ───────────────────
-    if git ls-remote --exit-code origin main &>/dev/null; then
-        log_info "Remote main branch létezik → pull --rebase..."
-        git pull --rebase origin main \
-            && log_ok "Pull kész." \
-            || log_warn "Rebase ütközés lehet. Ellenőrizd: git status, majd: git rebase --continue"
-    else
-        log_info "Remote repó üres – első push lesz."
-    fi
-
-    # ── Commit: lokális változások ────────────────────────────────────────────
+    # ── 1. LÉPÉS: Lokális változások commitolása ELŐBB ───────────────────────
+    # Pull --rebase csak clean working tree-vel működik.
+    # Ezért ELŐSZÖR stage-elünk és commitolunk, UTÁNA pull-olunk.
     local changed
     changed=$(git status --porcelain | wc -l)
 
     if [[ "$changed" -gt 0 ]]; then
         git add -A
-
-        # Commit üzenet generálása
         local commit_msg
         commit_msg="chore: projekt csatlakoztatva GitHub repóhoz
 
@@ -1253,31 +1239,61 @@ Felhasználó: @${GIT_USERNAME}
 Platform: $(uname -srm)
 Dátum: $(date '+%Y-%m-%d %H:%M:%S')
 Eszköz: ${SCRIPT_NAME} v${VERSION} (${REPO_URL})"
-
         git commit -m "$commit_msg"
-        log_ok "Commit létrehozva."
+        log_ok "Lokális commit létrehozva."
     else
         log_info "Nincs helyi változás commitolni."
     fi
 
-    # ── Push ──────────────────────────────────────────────────────────────────
-    # SSH kulcs agent-hez adása push előtt – passphrase esetén interaktívan kéri
-    # Ez szükséges, mert a git push SSH-n keresztül kommunikál
+    # ── 2. LÉPÉS: Fetch ───────────────────────────────────────────────────────
+    log_info "Fetch: remote branch-ek frissítése..."
+    git fetch origin 2>/dev/null \
+        && log_ok "Fetch kész." \
+        || log_warn "Fetch sikertelen (esetleg üres remote, ez normális első futásnál)."
+
+    # ── 3. LÉPÉS: Pull – ha a remote-on van tartalom ─────────────────────────
+    # Most már nincs unstaged change (commitoltuk), a pull --rebase működik.
+    # Ha mégis ütközne, megpróbálja merge-szel.
+    if git ls-remote --exit-code origin main &>/dev/null; then
+        log_info "Remote main branch létezik → pull --rebase..."
+        if git pull --rebase origin main 2>/dev/null; then
+            log_ok "Pull (rebase) kész."
+        else
+            log_warn "Rebase sikertelen – merge módban próbálom..."
+            git rebase --abort 2>/dev/null || true
+            if git pull --no-rebase origin main 2>/dev/null; then
+                log_ok "Pull (merge) kész."
+            else
+                log_warn "Pull sikertelen – push --force-with-lease-szel próbálom."
+            fi
+        fi
+    else
+        log_info "Remote repó üres – első push lesz."
+    fi
+
+    # ── 4. LÉPÉS: Push ───────────────────────────────────────────────────────
+    # SSH kulcs agent-hez adása push előtt
     log_info "SSH agent ellenőrzése push előtt..."
     if [[ -z "${SSH_AUTH_SOCK:-}" ]]; then
         eval "$(ssh-agent -s)" &>/dev/null
         log_info "ssh-agent elindítva."
     fi
-    # Ha a kulcsnak van passphrase-e, most kéri meg a rendszer
-    if ! ssh-add -l &>/dev/null | grep -q "$(ssh-keygen -lf "${SSH_KEY_PATH}.pub" 2>/dev/null | awk '{print $2}')"; then
+    if ! ssh-add -l 2>/dev/null | grep -q "$(ssh-keygen -lf "${SSH_KEY_PATH}.pub" 2>/dev/null | awk '{print $2}')"; then
         log_info "SSH kulcs hozzáadása agent-hez (passphrase esetén most kéri)..."
-        ssh-add "$SSH_KEY_PATH" || log_warn "ssh-add sikertelen – a push megpróbálkozik SSH kulcs nélkül is."
+        ssh-add "$SSH_KEY_PATH" || log_warn "ssh-add sikertelen – push megpróbálkozik kulcs nélkül is."
     fi
 
     log_info "Push → origin main..."
-    git push --set-upstream origin main \
-        && log_ok "Push sikeres! → https://github.com/${SELECTED_REPO}" \
-        || log_warn "Push sikertelen. Ellenőrizd: ssh -T git@github.com"
+    if git push --set-upstream origin main 2>&1; then
+        log_ok "Push sikeres! → https://github.com/${SELECTED_REPO}"
+    else
+        log_warn "Normál push sikertelen – force-with-lease próba (nem törli a remote commitokat)..."
+        if git push --force-with-lease origin main 2>&1; then
+            log_ok "Push (force-with-lease) sikeres! → https://github.com/${SELECTED_REPO}"
+        else
+            log_warn "Push sikertelen. Futtasd manuálisan: git push --force origin main"
+        fi
+    fi
     log_fn_exit
 }
 
