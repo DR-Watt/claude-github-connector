@@ -1134,6 +1134,15 @@ sync_with_remote() {
     log_section "Szinkronizálás → ${SELECTED_REPO}"
 
     # ── Fetch: remote állapot lekérése ────────────────────────────────────────
+    # ci.yml áthelyezése .github/workflows/ alá, ha a gyökérben van
+    # GitHub Actions csak a .github/workflows/ mappából olvassa a pipeline-t
+    if [[ -f "ci.yml" && ! -f ".github/workflows/ci.yml" ]]; then
+        log_info "ci.yml áthelyezése .github/workflows/ könyvtárba..."
+        mkdir -p ".github/workflows"
+        mv "ci.yml" ".github/workflows/ci.yml"
+        log_ok "CI pipeline áthelyezve: .github/workflows/ci.yml"
+    fi
+
     log_info "Fetch: remote branch-ek frissítése..."
     git fetch origin 2>/dev/null \
         && log_ok "Fetch kész." \
@@ -1181,6 +1190,19 @@ Eszköz: ${SCRIPT_NAME} v${VERSION} (${REPO_URL})"
     fi
 
     # ── Push ──────────────────────────────────────────────────────────────────
+    # SSH kulcs agent-hez adása push előtt – passphrase esetén interaktívan kéri
+    # Ez szükséges, mert a git push SSH-n keresztül kommunikál
+    log_info "SSH agent ellenőrzése push előtt..."
+    if [[ -z "${SSH_AUTH_SOCK:-}" ]]; then
+        eval "$(ssh-agent -s)" &>/dev/null
+        log_info "ssh-agent elindítva."
+    fi
+    # Ha a kulcsnak van passphrase-e, most kéri meg a rendszer
+    if ! ssh-add -l &>/dev/null | grep -q "$(ssh-keygen -lf "${SSH_KEY_PATH}.pub" 2>/dev/null | awk '{print $2}')"; then
+        log_info "SSH kulcs hozzáadása agent-hez (passphrase esetén most kéri)..."
+        ssh-add "$SSH_KEY_PATH" || log_warn "ssh-add sikertelen – a push megpróbálkozik SSH kulcs nélkül is."
+    fi
+
     log_info "Push → origin main..."
     git push --set-upstream origin main \
         && log_ok "Push sikeres! → https://github.com/${SELECTED_REPO}" \
